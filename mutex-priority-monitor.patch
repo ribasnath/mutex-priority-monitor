@@ -1,0 +1,734 @@
+diff --git a/apps/examples/mutex_monitor/.gitignore b/apps/examples/mutex_monitor/.gitignore
+new file mode 100644
+index 0000000000..3dfc3a1ad2
+--- /dev/null
++++ b/apps/examples/mutex_monitor/.gitignore
+@@ -0,0 +1 @@
++.built
+diff --git a/apps/examples/mutex_monitor/Kconfig b/apps/examples/mutex_monitor/Kconfig
+new file mode 100644
+index 0000000000..6b15634ef6
+--- /dev/null
++++ b/apps/examples/mutex_monitor/Kconfig
+@@ -0,0 +1,30 @@
++#
++# For a description of the syntax of this configuration file,
++# see the file kconfig-language.txt in the NuttX tools repository.
++#
++
++config EXAMPLES_MUTEX_MONITOR
++	tristate "Mutex priority monitor"
++	depends on !DISABLE_PTHREAD
++	default n
++	---help---
++		Monitora as prioridades dos mutexes no NuttX
++
++if EXAMPLES_MUTEX_MONITOR
++
++config EXAMPLES_MUTEX_MONITOR_PROGNAME
++	string "Nome do programa"
++	default "MutexMonitor"
++	---help---
++		This is the name of the program that will be used when the NSH ELF
++		program is installed.
++
++config EXAMPLES_MUTEX_MONITOR_PRIORITY
++	int "Prioridade"
++	default 100
++
++config EXAMPLES_MUTEX_MONITOR_STACKSIZE
++	int "Tamanho da pilha"
++	default DEFAULT_TASK_STACKSIZE
++
++endif
+diff --git a/apps/examples/mutex_monitor/Make.defs b/apps/examples/mutex_monitor/Make.defs
+new file mode 100644
+index 0000000000..1ad363e9fb
+--- /dev/null
++++ b/apps/examples/mutex_monitor/Make.defs
+@@ -0,0 +1,25 @@
++############################################################################
++# apps/examples/mutex_monitor/Make.defs
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++# Licensed to the Apache Software Foundation (ASF) under one or more
++# contributor license agreements.  See the NOTICE file distributed with
++# this work for additional information regarding copyright ownership.  The
++# ASF licenses this file to you under the Apache License, Version 2.0 (the
++# "License"); you may not use this file except in compliance with the
++# License.  You may obtain a copy of the License at
++#
++#   http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
++# License for the specific language governing permissions and limitations
++# under the License.
++#
++############################################################################
++
++ifneq ($(CONFIG_EXAMPLES_MUTEX_MONITOR),)
++CONFIGURED_APPS += $(APPDIR)/examples/mutex_monitor
++endif
+diff --git a/apps/examples/mutex_monitor/Makefile b/apps/examples/mutex_monitor/Makefile
+new file mode 100644
+index 0000000000..3ef7eb4595
+--- /dev/null
++++ b/apps/examples/mutex_monitor/Makefile
+@@ -0,0 +1,36 @@
++############################################################################
++# apps/examples/mutex_monitor/Makefile
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++# Licensed to the Apache Software Foundation (ASF) under one or more
++# contributor license agreements.  See the NOTICE file distributed with
++# this work for additional information regarding copyright ownership.  The
++# ASF licenses this file to you under the Apache License, Version 2.0 (the
++# "License"); you may not use this file except in compliance with the
++# License.  You may obtain a copy of the License at
++#
++#   http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
++# License for the specific language governing permissions and limitations
++# under the License.
++#
++############################################################################
++
++include $(APPDIR)/Make.defs
++
++# Mutex monitor built-in application info
++
++PROGNAME  = $(CONFIG_EXAMPLES_MUTEX_MONITOR_PROGNAME)
++PRIORITY  = $(CONFIG_EXAMPLES_MUTEX_MONITOR_PRIORITY)
++STACKSIZE = $(CONFIG_EXAMPLES_MUTEX_MONITOR_STACKSIZE)
++MODULE    = $(CONFIG_EXAMPLES_MUTEX_MONITOR)
++
++# Mutex monitor
++
++MAINSRC = mutex_monitor_main.c
++
++include $(APPDIR)/Application.mk
+diff --git a/apps/examples/mutex_monitor/mutex_monitor_main.c b/apps/examples/mutex_monitor/mutex_monitor_main.c
+new file mode 100644
+index 0000000000..d95e4a2fda
+--- /dev/null
++++ b/apps/examples/mutex_monitor/mutex_monitor_main.c
+@@ -0,0 +1,358 @@
++/****************************************************************************
++ * apps/examples/mutex_monitor/mutex_monitor_main.c
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.  The
++ * ASF licenses this file to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance with the
++ * License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
++ * License for the specific language governing permissions and limitations
++ * under the License.
++ *
++ ****************************************************************************/
++
++/****************************************************************************
++ * Included Files
++ ****************************************************************************/
++
++#include <nuttx/config.h>
++#include <stdio.h>
++#include <pthread.h>
++#include <nuttx/sched.h>
++#include <semaphore.h>
++#include <sched.h>
++#include <errno.h>
++
++/****************************************************************************
++ * Private Data
++ ****************************************************************************/
++
++static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
++
++static sem_t g_low_locked;
++static sem_t g_release_low;
++static sem_t g_high_attempting;
++
++/****************************************************************************
++ * Private Function Prototypes
++ ****************************************************************************/
++
++static FAR void *low_thread(FAR void *arg);
++static FAR void *high_thread(FAR void *arg);
++
++/****************************************************************************
++ * Public Functions
++ ****************************************************************************/
++
++/****************************************************************************
++ * mutex_monitor_main
++ ****************************************************************************/
++
++int main(int argc, FAR char *argv[])
++{
++  int ret;
++  pthread_t low_tid;
++  pthread_t high_tid;
++  pthread_attr_t attr;
++  struct sched_param param =
++    {
++      0
++    };
++
++  struct mutexinfo_s info;
++
++  /* Inicia os semáforos */
++
++  if (sem_init(&g_low_locked, 0, 0) == -1)
++    {
++      perror("sem_init g_low_locked");
++      return 1;
++    }
++
++  if (sem_init(&g_release_low, 0, 0) == -1)
++    {
++      perror("sem_init g_release_low");
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  if (sem_init(&g_high_attempting, 0, 0) == -1)
++    {
++      perror("sem_init g_high_attempting");
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  /* Inicia pthread low */
++
++  ret = pthread_attr_init(&attr);
++  if (ret != 0)
++    {
++      printf("pthread_attr_init failed: %d\n", ret);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  param.sched_priority = 80;
++
++  ret = pthread_attr_setschedparam(&attr, &param);
++  if (ret != 0)
++    {
++      printf("pthread_attr_setschedparam failed: %d\n", ret);
++      pthread_attr_destroy(&attr);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  ret = pthread_create(&low_tid, &attr, low_thread, NULL);
++  pthread_attr_destroy(&attr);
++
++  if (ret != 0)
++    {
++      printf("pthread_create failed: %d\n", ret);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  ret = sem_wait(&g_low_locked);
++  if (ret == -1)
++    {
++      perror("sem_wait g_low_locked");
++      return 1;
++    }
++
++  printf("[main] low confirmou a aquisição\n");
++
++  /* Inicia pthread high */
++
++  ret = pthread_attr_init(&attr);
++  if (ret != 0)
++    {
++      printf("pthread_attr_init failed: %d\n", ret);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  param.sched_priority = 150;
++
++  ret = pthread_attr_setschedparam(&attr, &param);
++  if (ret != 0)
++    {
++      printf("pthread_attr_setschedparam failed: %d\n", ret);
++      pthread_attr_destroy(&attr);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  ret = pthread_create(&high_tid, &attr, high_thread, NULL);
++  pthread_attr_destroy(&attr);
++
++  if (ret != 0)
++    {
++      printf("pthread_create failed: %d\n", ret);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  ret = sem_wait(&g_high_attempting);
++  if (ret == -1)
++    {
++      perror("sem_wait g_high_attempting");
++      return 1;
++    }
++
++  printf("[main] high iniciou a tentativa\n");
++
++  /* Chama nova syscall */
++
++  ret = nxsched_get_mutexinfo(high_tid, &info);
++  if (ret < 0)
++    {
++      printf("nxsched_get_mutexinfo failed: %d\n", ret);
++    }
++  else
++    {
++      printf("TID consultado=%d ", (int)high_tid);
++      printf("Waiting?=%d ", info.waiting);
++      printf("Prioridade do waiter=%d\n", info.waiter_priority);
++      printf("PID do holder=%d ", info.holder_pid);
++      printf("Prioridade do holder=%d ", info.holder_priority);
++      printf("Risco de inversão?=%d\n", info.inversion_risk);
++    }
++
++  ret = nxsched_get_mutexinfo((pid_t)high_tid, NULL);
++  if (ret == -EINVAL)
++    {
++      printf("[TEST] NULL info: PASS\n");
++    }
++  else
++    {
++      printf("[TEST] NULL info: FAIL, ret=%d\n", ret);
++    }
++
++  ret = nxsched_get_mutexinfo(INVALID_PROCESS_ID, &info);
++  if (ret == -ESRCH)
++    {
++      printf("[TEST] invalid PID: PASS\n");
++    }
++  else
++    {
++      printf("[TEST] invalid PID: FAIL, ret=%d\n", ret);
++    }
++
++  ret = sem_post(&g_release_low);
++  if (ret == -1)
++    {
++      perror("sem_post g_release_low");
++      return 1;
++    }
++
++  ret = nxsched_get_mutexinfo(0, &info);
++  if (ret == OK && !info.waiting &&
++      info.holder_pid == INVALID_PROCESS_ID &&
++      info.holder_priority == -1 && !info.inversion_risk)
++    {
++      printf("[TEST] running task: PASS, priority=%d\n",
++            info.waiter_priority);
++    }
++  else
++    {
++      printf("[TEST] running task: FAIL, ret=%d\n", ret);
++    }
++
++  ret = pthread_join(high_tid, NULL);
++  if (ret != 0)
++    {
++      printf("pthread_join failed: %d\n", ret);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  ret = pthread_join(low_tid, NULL);
++  if (ret != 0)
++    {
++      printf("pthread_join failed: %d\n", ret);
++      sem_destroy(&g_high_attempting);
++      sem_destroy(&g_release_low);
++      sem_destroy(&g_low_locked);
++      return 1;
++    }
++
++  sem_destroy(&g_high_attempting);
++  sem_destroy(&g_release_low);
++  sem_destroy(&g_low_locked);
++  return 0;
++}
++
++/****************************************************************************
++ * Private Functions
++ ****************************************************************************/
++
++/****************************************************************************
++ * low_thread
++ ****************************************************************************/
++
++static FAR void *low_thread(FAR void *arg)
++{
++  int ret;
++
++  (void)arg;
++
++  ret = pthread_mutex_lock(&g_mutex);
++  if (ret != 0)
++    {
++      printf("pthread_mutex_lock failed: %d\n", ret);
++      return NULL;
++    }
++
++  printf("[low] mutex adquirido\n");
++
++  ret = sem_post(&g_low_locked);
++  if (ret == -1)
++    {
++      perror("sem_post g_low_locked");
++      pthread_mutex_unlock(&g_mutex);
++      return NULL;
++    }
++
++  ret = sem_wait(&g_release_low);
++  if (ret == -1)
++    {
++      perror("sem_wait g_release_low");
++      pthread_mutex_unlock(&g_mutex);
++      return NULL;
++    }
++
++  ret = pthread_mutex_unlock(&g_mutex);
++  if (ret != 0)
++    {
++      printf("pthread_mutex_unlock failed: %d\n", ret);
++      return NULL;
++    }
++
++  printf("[low] mutex liberado\n");
++  return NULL;
++}
++
++/****************************************************************************
++ * high_thread
++ ****************************************************************************/
++
++static FAR void *high_thread(FAR void *arg)
++{
++  int ret;
++
++  (void)arg;
++
++  ret = sem_post(&g_high_attempting);
++  if (ret == -1)
++    {
++      perror("sem_post g_high_attempting");
++      return NULL;
++    }
++
++  printf("[high] tentando adquirir mutex\n");
++
++  ret = pthread_mutex_lock(&g_mutex);
++  if (ret != 0)
++    {
++      printf("pthread_mutex_lock failed: %d\n", ret);
++      return NULL;
++    }
++
++  printf("[high] mutex adquirido\n");
++
++  ret = pthread_mutex_unlock(&g_mutex);
++  if (ret != 0)
++    {
++      printf("pthread_mutex_unlock failed: %d\n", ret);
++      return NULL;
++    }
++
++  printf("[high] mutex liberado\n");
++  return NULL;
++}
+diff --git a/include/nuttx/sched.h b/include/nuttx/sched.h
+index 04747b3442..111da26671 100644
+--- a/include/nuttx/sched.h
++++ b/include/nuttx/sched.h
+@@ -417,6 +417,19 @@ struct stackinfo_s
+                                          /* from the stack.                  */
+ };
+ 
++/* struct mutexinfo_s *******************************************************/
++
++/* Used to report mutex information */
++
++struct mutexinfo_s
++{
++  pid_t holder_pid;                      /* Holder TID or INVALID_PROCESS_ID */
++  int waiter_priority;                   /* Current queried thread priority  */
++  int holder_priority;                   /* Current holder priority or -1    */
++  bool waiting;                          /* Thread is waiting for a mutex    */
++  bool inversion_risk;                   /* Waiter priority exceeds holder   */
++};
++
+ /* struct task_join_s *******************************************************/
+ 
+ /* Used to save task join information */
+@@ -1488,6 +1501,34 @@ int nxsched_set_affinity(pid_t pid, size_t cpusetsize,
+ 
+ int nxsched_get_stackinfo(pid_t pid, FAR struct stackinfo_s *stackinfo);
+ 
++/****************************************************************************
++ * Name: nxsched_get_mutexinfo
++ *
++ * Description:
++ *   Report whether a thread is waiting for a mutex, the mutex holder and
++ *   their current priorities, and whether the priorities indicate a
++ *   possible priority inversion.
++ *
++ * Input Parameters:
++ *   pid       - Identifies the thread to query. Zero identifies the
++ *               calling thread.
++ *   info      - User-provided location to return the mutex wait information.
++ *
++ * Returned Value:
++ *   Zero (OK) if successful.  Otherwise, a negated errno value is returned.
++ *   A valid thread that is not waiting for a mutex also returns OK when:
++ *   waiting = false
++ *   holder_pid = INVALID_PROCESS_ID
++ *   holder_priority = -1
++ *   inversion_risk = false
++ *
++ *     -EINVAL  The info argument is NULL.
++ *     -ESRCH   The pid does not identify an active thread.
++ *
++ ****************************************************************************/
++
++int nxsched_get_mutexinfo(pid_t pid, FAR struct mutexinfo_s *info);
++
+ /****************************************************************************
+  * Name: nxsched_get_stateinfo
+  *
+diff --git a/include/sys/syscall_lookup.h b/include/sys/syscall_lookup.h
+index 196401508b..c0849a6379 100644
+--- a/include/sys/syscall_lookup.h
++++ b/include/sys/syscall_lookup.h
+@@ -44,6 +44,7 @@ SYSCALL_LOOKUP(sched_setparam,             2)
+ SYSCALL_LOOKUP(sched_setscheduler,         3)
+ SYSCALL_LOOKUP(sched_unlock,               0)
+ SYSCALL_LOOKUP(sched_yield,                0)
++SYSCALL_LOOKUP(nxsched_get_mutexinfo,      2)
+ SYSCALL_LOOKUP(nxsched_get_stackinfo,      2)
+ 
+ #ifdef CONFIG_SCHED_BACKTRACE
+diff --git a/sched/sched/CMakeLists.txt b/sched/sched/CMakeLists.txt
+index 5daf47917b..62203450e7 100644
+--- a/sched/sched/CMakeLists.txt
++++ b/sched/sched/CMakeLists.txt
+@@ -44,6 +44,7 @@ set(SRCS
+     sched_self.c
+     sched_getcpu.c
+     sched_get_stackinfo.c
++    sched_get_mutexinfo.c
+     sched_get_tls.c
+     sched_sysinfo.c
+     sched_get_stateinfo.c
+diff --git a/sched/sched/Make.defs b/sched/sched/Make.defs
+index a7e5bb8a61..d6f6eb797a 100644
+--- a/sched/sched/Make.defs
++++ b/sched/sched/Make.defs
+@@ -28,7 +28,7 @@ CSRCS += sched_setparam.c sched_setpriority.c sched_getparam.c
+ CSRCS += sched_setscheduler.c sched_getscheduler.c
+ CSRCS += sched_yield.c sched_rrgetinterval.c sched_foreach.c
+ CSRCS += sched_lock.c sched_unlock.c sched_lockcount.c
+-CSRCS += sched_idletask.c sched_self.c sched_get_stackinfo.c sched_get_tls.c
++CSRCS += sched_idletask.c sched_self.c sched_get_stackinfo.c sched_get_tls.c sched_get_mutexinfo.c
+ CSRCS += sched_sysinfo.c sched_get_stateinfo.c sched_getcpu.c
+ CSRCS += sched_switchcontext.c sched_sleep.c
+ 
+diff --git a/sched/sched/sched_get_mutexinfo.c b/sched/sched/sched_get_mutexinfo.c
+new file mode 100644
+index 0000000000..3c74af5289
+--- /dev/null
++++ b/sched/sched/sched_get_mutexinfo.c
+@@ -0,0 +1,140 @@
++/****************************************************************************
++ * sched/sched/sched_get_mutexinfo.c
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.  The
++ * ASF licenses this file to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance with the
++ * License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
++ * License for the specific language governing permissions and limitations
++ * under the License.
++ *
++ ****************************************************************************/
++
++/****************************************************************************
++ * Included Files
++ ****************************************************************************/
++
++#include <nuttx/config.h>
++
++#include <sys/types.h>
++#include <errno.h>
++#include <semaphore.h>
++
++#include <nuttx/irq.h>
++#include <nuttx/mutex.h>
++#include <nuttx/sched.h>
++
++#include "sched/sched.h"
++
++/****************************************************************************
++ * Public Functions
++ ****************************************************************************/
++
++/****************************************************************************
++ * Name: nxsched_get_mutexinfo
++ *
++ * Description:
++ *   Report whether a thread is waiting for a mutex, the mutex holder and
++ *   their current priorities, and whether the priorities indicate a
++ *   possible priority inversion.
++ *
++ * Input Parameters:
++ *   pid       - Identifies the thread to query. Zero identifies the
++ *               calling thread.
++ *   info      - User-provided location to return the mutex wait information.
++ *
++ * Returned Value:
++ *   Zero (OK) if successful.  Otherwise, a negated errno value is returned.
++ *   A valid thread that is not waiting for a mutex also returns OK when:
++ *   waiting = false
++ *   holder_pid = INVALID_PROCESS_ID
++ *   holder_priority = -1
++ *   inversion_risk = false
++ *
++ *     -EINVAL  The info argument is NULL.
++ *     -ESRCH   The pid does not identify an active thread.
++ *
++ ****************************************************************************/
++
++int nxsched_get_mutexinfo(pid_t pid, FAR struct mutexinfo_s *info)
++{
++  FAR struct tcb_s *tcb;   /* TCB of queried task */
++  FAR struct tcb_s *htcb;  /* TCB of mutex holder */
++  int ret = OK;
++  irqstate_t flags;
++  FAR sem_t *sem;
++
++  if (info != NULL)
++    {
++      flags = enter_critical_section();
++
++      /* Pid of 0 means that we are querying ourself */
++
++      if (pid == 0)
++        {
++          /* We can always query ourself */
++
++          tcb = this_task();
++        }
++      else
++        {
++          /* Get the task to be queried */
++
++          tcb = nxsched_get_tcb(pid);
++        }
++
++      if (tcb == NULL)
++        {
++          ret = -ESRCH;
++        }
++      else
++        {
++          info->holder_pid = INVALID_PROCESS_ID;
++          info->waiter_priority = (int)tcb->sched_priority;
++          info->holder_priority = -1;
++          info->waiting = false;
++          info->inversion_risk = false;
++
++          if (tcb->task_state == TSTATE_WAIT_SEM && tcb->waitobj != NULL)
++            {
++              sem = (FAR sem_t *)tcb->waitobj;
++
++              if ((sem->flags & SEM_TYPE_MUTEX) != 0)
++                {
++                  info->waiting = true;
++                  info->holder_pid = nxmutex_get_holder((FAR mutex_t *)sem);
++                }
++            }
++
++          if (info->holder_pid >= 0)
++            {
++              htcb = nxsched_get_tcb(info->holder_pid);
++
++              if (htcb != NULL)
++                {
++                  info->holder_priority = (int)htcb->sched_priority;
++                  info->inversion_risk = info->waiter_priority >
++                                        info->holder_priority;
++                }
++            }
++        }
++
++      leave_critical_section(flags);
++    }
++  else
++    {
++      ret = -EINVAL;
++    }
++
++  return ret;
++}
+diff --git a/syscall/syscall.csv b/syscall/syscall.csv
+index 7ae03c68d5..68afbb4e31 100644
+--- a/syscall/syscall.csv
++++ b/syscall/syscall.csv
+@@ -99,6 +99,7 @@
+ "nx_pthread_create","nuttx/pthread.h","!defined(CONFIG_DISABLE_PTHREAD)","int","pthread_trampoline_t","FAR pthread_t *","FAR const pthread_attr_t *","pthread_startroutine_t","pthread_addr_t"
+ "nx_pthread_exit","nuttx/pthread.h","!defined(CONFIG_DISABLE_PTHREAD)","noreturn","pthread_addr_t"
+ "nx_vsyslog","nuttx/syslog/syslog.h","!defined(CONFIG_SYSLOG_TO_SCHED_NOTE)","int","int","FAR const IPTR char *","FAR va_list *"
++"nxsched_get_mutexinfo","nuttx/sched.h","","int","pid_t","FAR struct mutexinfo_s *"
+ "nxsched_get_stackinfo","nuttx/sched.h","","int","pid_t","FAR struct stackinfo_s *"
+ "nxsem_tickwait","nuttx/semaphore.h","","int","FAR sem_t *","uint32_t"
+ "nxsem_clockwait","nuttx/semaphore.h","","int","FAR sem_t *","clockid_t","FAR const struct timespec *"

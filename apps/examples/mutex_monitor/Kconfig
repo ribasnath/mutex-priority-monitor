@@ -1,0 +1,30 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config EXAMPLES_MUTEX_MONITOR
+	tristate "Mutex priority monitor"
+	depends on !DISABLE_PTHREAD
+	default n
+	---help---
+		Monitora as prioridades dos mutexes no NuttX
+
+if EXAMPLES_MUTEX_MONITOR
+
+config EXAMPLES_MUTEX_MONITOR_PROGNAME
+	string "Nome do programa"
+	default "MutexMonitor"
+	---help---
+		This is the name of the program that will be used when the NSH ELF
+		program is installed.
+
+config EXAMPLES_MUTEX_MONITOR_PRIORITY
+	int "Prioridade"
+	default 100
+
+config EXAMPLES_MUTEX_MONITOR_STACKSIZE
+	int "Tamanho da pilha"
+	default DEFAULT_TASK_STACKSIZE
+
+endif
