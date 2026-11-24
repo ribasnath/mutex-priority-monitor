@@ -44,6 +44,7 @@ SYSCALL_LOOKUP(sched_setparam,             2)
 SYSCALL_LOOKUP(sched_setscheduler,         3)
 SYSCALL_LOOKUP(sched_unlock,               0)
 SYSCALL_LOOKUP(sched_yield,                0)
+SYSCALL_LOOKUP(nxsched_get_mutexinfo,      2)
 SYSCALL_LOOKUP(nxsched_get_stackinfo,      2)
 
 #ifdef CONFIG_SCHED_BACKTRACE

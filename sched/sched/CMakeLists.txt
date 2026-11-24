@@ -44,6 +44,7 @@ set(SRCS
     sched_self.c
     sched_getcpu.c
     sched_get_stackinfo.c
+    sched_get_mutexinfo.c
     sched_get_tls.c
     sched_sysinfo.c
     sched_get_stateinfo.c

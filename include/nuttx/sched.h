@@ -417,6 +417,19 @@ struct stackinfo_s
                                          /* from the stack.                  */
 };
 
+/* struct mutexinfo_s *******************************************************/
+
+/* Used to report mutex information */
+
+struct mutexinfo_s
+{
+  pid_t holder_pid;                      /* Holder TID or INVALID_PROCESS_ID */
+  int waiter_priority;                   /* Current queried thread priority  */
+  int holder_priority;                   /* Current holder priority or -1    */
+  bool waiting;                          /* Thread is waiting for a mutex    */
+  bool inversion_risk;                   /* Waiter priority exceeds holder   */
+};
+
 /* struct task_join_s *******************************************************/
 
 /* Used to save task join information */
@@ -1487,6 +1500,34 @@ int nxsched_set_affinity(pid_t pid, size_t cpusetsize,
  ****************************************************************************/
 
 int nxsched_get_stackinfo(pid_t pid, FAR struct stackinfo_s *stackinfo);
+
+/****************************************************************************
+ * Name: nxsched_get_mutexinfo
+ *
+ * Description:
+ *   Report whether a thread is waiting for a mutex, the mutex holder and
+ *   their current priorities, and whether the priorities indicate a
+ *   possible priority inversion.
+ *
+ * Input Parameters:
+ *   pid       - Identifies the thread to query. Zero identifies the
+ *               calling thread.
+ *   info      - User-provided location to return the mutex wait information.
+ *
+ * Returned Value:
+ *   Zero (OK) if successful.  Otherwise, a negated errno value is returned.
+ *   A valid thread that is not waiting for a mutex also returns OK when:
+ *   waiting = false
+ *   holder_pid = INVALID_PROCESS_ID
+ *   holder_priority = -1
+ *   inversion_risk = false
+ *
+ *     -EINVAL  The info argument is NULL.
+ *     -ESRCH   The pid does not identify an active thread.
+ *
+ ****************************************************************************/
+
+int nxsched_get_mutexinfo(pid_t pid, FAR struct mutexinfo_s *info);
 
 /****************************************************************************
  * Name: nxsched_get_stateinfo
